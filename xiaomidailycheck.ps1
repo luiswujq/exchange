@@ -1,5 +1,7 @@
-﻿Clear-Host
+Clear-Host
 Write-Host "Start to Check the Exchange Server Healthy...`r`n"
+
+
 
 #Suppress Output if caught the errors
 $ErrorActionPreference = "SilentlyContinue"
@@ -13,15 +15,21 @@ if ($isPSSnapinLoaded -eq $NULL)
 	Add-PSSnapin -Name "Microsoft.Exchange.Management.PowerShell.E2010"
 } else
 {
-	#break
+	break
 }
+
+.'C:\Program Files\Microsoft\Exchange Server\V15\Bin\RemoteExchange.ps1'
+
+Connect-ExchangeServer -auto
+
+
 
 #parameters
 $CommonServices = @("W32Time", "Winmgmt", "Dnscache", "RpcEptMapper", "rpcss")
 $CheckTime = Get-Date -Format "yyyy-MM-dd.HH.mm"
 $CheckTime1 = Get-Date -Format "yyyy-MM-dd HH:mm"
 $WarningLevel = 20.0;
-$WorkFolder = "d:\xiaomi"
+$WorkFolder = "c:\xiaomi"
 #Define the output for each check object
 $DiskCheckResult = @()
 $DiskCheckError = @()
@@ -51,14 +59,15 @@ $REPLTestResult = @()
 $REPLTestError = @()
 $DBPeocountCheckResult = @()
 $DBPeocountCheckError = @()
+$ServerComponentStateResult = @()
 
 #serverlist
-$ExchangeServers = Get-ExchangeServer #"ex-cas1", "ex-cas2", "ex-mbox1", "ex-mbox2"
-$CASServers = "ex-cas1", "ex-cas2"
-$MBXServers = "ex-mbox1", "ex-mbox2"
-$DBs =  $DBs =  Get-MailboxDatabase -Status | where-object {$_.server -like "ex-mbox*"}
-$HTServers = Get-TransportServer 
-$MBXDBs = Get-MailboxDatabase   
+$ExchangeServers = get-exchangeserver
+$CASServers = Get-ClientAccessServer  | where-object {$_.name -like "*cas*"}
+$MBXServers = Get-MailboxServer | where-object {$_.name -like "*box*"}
+$DBs =  Get-MailboxDatabase -Status | where-object {$_.server -like "*box*"}
+$HTServers = Get-TransportService 
+$MBXDBs = Get-MailboxDatabase    
 
 
 
@@ -69,32 +78,27 @@ foreach($Server in $ExchangeServers)
 	## Start to check time differentiation between Exchange server and DC.
 	#Write-Host "Checking Time differential"  `r
 	
-	$ExServerTime = net time  \\$Server
-	$ExServerTime, $tmp, $Success = $ExServerTime
-	$ExServerTime = ($ExServerTime.split("是")[-1]).trim()
-	$ExServerTime = [datetime]::ParseExact($ExServerTime, "M/d/yyyy h:mm:ss tt", $null)
+	#$ExServerTime = net time  \\$Server
+	#$ExServerTime, $tmp, $Success = $ExServerTime
+	#$ExServerTime = ($ExServerTime.split("是")[-1]).trim()
+	#$ExServerTime = [datetime]::ParseExact($ExServerTime, "M/d/yyyy h:mm:ss tt", $null)
 	
-	$DCTime = net time
-	$DCTime,$tmp,$Success = $DCTime
-	$DCTime = ($DCTime.split("是")[-1]).trim()
-	$DCTime = [datetime]::ParseExact($DCTime, "M/d/yyyy h:mm:ss tt", $null)
+	#$DCTime = net time
+	#$DCTime,$tmp,$Success = $DCTime
+	#$DCTime = ($DCTime.split("是")[-1]).trim()
+	#$DCTime = [datetime]::ParseExact($DCTime, "M/d/yyyy h:mm:ss tt", $null)
 	
-	$TimeDiff = ($DCTime - $ExServerTime).TotalSeconds
+	#$TimeDiff = ($DCTime - $ExServerTime).TotalSeconds
 	#$TimeDiff = "{0:N0}" -f $TimeDiff
-	
+	$DCTime = icm mioffice-dc11 {Get-Date}
+    $ExServerTime = icm $Server {Get-Date}
+    $TimeDiff = ($DCTime - $ExServerTime).totalseconds
 	$TimeDiffObject = New-Object PSObject
 	Add-Member -InputObject $TimeDiffObject NoteProperty "Server Name" $Server.name
 	Add-Member -InputObject $TimeDiffObject NoteProperty "Server Time" $ExServerTime
 	Add-Member -InputObject $TimeDiffObject NoteProperty "DC Time" $DCTime
 	Add-Member -InputObject $TimeDiffObject NoteProperty "Time Diff" $TimeDiff
-	$TimeDiff
-	$iii = 0
-	if ( $TimeDiff -gt 250)
-	{
-	$iii
-		$TimeDiffCheckError = $TimeDiffCheckError += $TimeDiffObject
-		$iii+=1
-	}
+
 	$TimeDiffCheckResult = $TimeDiffCheckResult += $TimeDiffObject
 
 }
@@ -131,11 +135,12 @@ foreach($Server in $ExchangeServers)
 			}
 		}
 		}
+        $DiskCheckResult = $DiskCheckResult|sort-object -Property "Percent Available" -Descending
 	##End of Check Disk free space...
 
 
 		## Check CAS Service Status...
-#		Write-Host "Checking CAS Server Service Status..."  `r
+		Write-Host "Checking CAS Server Service Status..."  `r
 foreach($Server in $CASServers)
 {
 	$NonStartServices = ""
@@ -235,6 +240,7 @@ foreach($Server in $CASServers)
 		Add-Member -InputObject $DBCopyObject NoteProperty "Server Name" $Server
 		Add-Member -InputObject $DBCopyObject NoteProperty "Database Copy Name" $DBCopy.DatabaseName
 		Add-Member -InputObject $DBCopyObject NoteProperty "Status" $DBCopy.Status
+                Add-Member -InputObject $DBCopyObject NoteProperty "ContentIndexState" $DBCopy.ContentIndexState
 		$DBCopyCheckResult = $DBCopyCheckResult += $DBCopyObject
 
 		if(($DBCopy.Status -ne "Mounted") -and ($DBCopy.Status -ne "Healthy"))
@@ -243,59 +249,60 @@ foreach($Server in $CASServers)
 		} 
 	}
 	}
-	
+	$DBCopyCheckResult = $DBCopyCheckResult|Sort-Object -Property Status -Descending
 	## End of DB Copy Status Check
 	
 	## Get Database Backup Information ...
-#$now = [DateTime]::Now
-#$DBs = Get-MailboxDatabase -Status | where-object {$_.server -like "apmail*"}
+$now = [DateTime]::Now
+$DBs = Get-MailboxDatabase -Status 
 
-#foreach ($DB in $DBs)
-#{
-	#Write-Host -ForegroundColor Gray "Checking " $db.name" Backup Information..."
-	#$LastBackup = @()
-	#$Ago = @()
+foreach ($DB in $DBs)
+{
+	Write-Host -ForegroundColor Gray "Checking " $db.name" Backup Information..."
+	$LastBackup = @()
+	$Ago = @()
 	
-	#if ( $DB.LastFullBackup -eq $null -and $DB.LastIncrementalBackup -eq $null)
-	#{
-	#	$LastBackupTime = "Never"
-		#$LastBackupType = "Never"
-		#[String] $Ago = "Never"
-	#} elseif (($DB.LastFullBackup -eq $null) -or ($DB.LastFullBackup -lt $DB.LastIncrementalBackup))
-	#{
-		#$LastBackupTime = $DB.LastIncrementalBackup
-		#$LastBackupType = "Incremental"
-		#[int] $Ago = ( $now - $LastBackupTime).TotalHours
-		#$Ago = "{0:N0}" -f $Ago
-	#} elseif (($DB.LastIncrementalBackup -eq $null) -or($DB.LastIncrementalBackup -lt $DB.LastFullBackup))
-	#{
-	#	$LastBackupTime = $DB.LastFullBackup
-	#	$LastBackupType = "Full"
-	#	[int] $Ago = ( $now - $LastBackupTime).TotalHours
-		#$Ago = "{0:N0}" -f $Ago
-	#}
+	if ( $DB.LastFullBackup -eq $null -and $DB.LastIncrementalBackup -eq $null)
+	{
+		$LastBackupTime = "Never"
+		$LastBackupType = "Never"
+		[String] $Ago = "Never"
+} elseif (($DB.LastFullBackup -eq $null) -or ($DB.LastFullBackup -lt $DB.LastIncrementalBackup))
+	{
+	$LastBackupTime = $DB.LastIncrementalBackup
+		$LastBackupType = "Incremental"
+		[int] $Ago = ( $now - $LastBackupTime).TotalHours
+		$Ago = "{0:N0}" -f $Ago
+	} elseif (($DB.LastIncrementalBackup -eq $null) -or($DB.LastIncrementalBackup -lt $DB.LastFullBackup))
+	{
+		$LastBackupTime = $DB.LastFullBackup
+		$LastBackupType = "Full"
+		[int] $Ago = ( $now - $LastBackupTime).TotalHours
+		$Ago = "{0:N0}" -f $Ago
+	}
 	
-	#$DBObject = New-Object Object
-	#Add-Member -InputObject $DBObject NoteProperty "Database Name"	$DB.Name
-	#Add-Member -InputObject $DBObject NoteProperty "Server Name" $DB.Server
-	#Add-Member -InputObject $DBObject NoteProperty "Backup Type" $LastBackupType
-	#Add-Member -InputObject $DBObject NoteProperty "Backup Time" $LastBackupTime
-	#Add-Member -InputObject $DBObject NoteProperty "Elasped time" $Ago
-	#Add-Member -InputObject $DBObject NoteProperty "Last Full Backup" $DB.LastFullBackup
-	#Add-Member -InputObject $DBObject NoteProperty "Last Incremental Backup" $DB.LastincrementalBackup
+	$DBObject = New-Object Object
+	Add-Member -InputObject $DBObject NoteProperty "Database Name"	$DB.Name
+	Add-Member -InputObject $DBObject NoteProperty "Server Name" $DB.Server
+	Add-Member -InputObject $DBObject NoteProperty "Backup Type" $LastBackupType
+	Add-Member -InputObject $DBObject NoteProperty "Backup Time" $LastBackupTime
+	Add-Member -InputObject $DBObject NoteProperty "Elasped time" $Ago
+	Add-Member -InputObject $DBObject NoteProperty "Last Full Backup" $DB.LastFullBackup
+	Add-Member -InputObject $DBObject NoteProperty "Last Incremental Backup" $DB.LastincrementalBackup
 	
-	#$DBBackupCheckResult = $DBBackupCheckResult += $DBObject
+	$DBBackupCheckResult = $DBBackupCheckResult += $DBObject
 	
-	#if ($Ago -gt 144 -or $Ago -eq "Never")
-	#{
-		#$DBBackupCheckError = $DBBackupCheckError += $DBObject
-	#}
-#}
+	if ($Ago -gt 144 -or $Ago -eq "Never")
+	{
+		$DBBackupCheckError = $DBBackupCheckError += $DBObject
+	}
+}
+$DBBackupCheckResult = $DBBackupCheckResult|Sort-Object -Property "Elasped time" -Descending
 	## End of Database Backup Information Check
 
 ## Check Transport server queue status
 write-host Checking Queue status...
-$Queues = $CASServers| Get-Queue -Filter {MessageCount -gt 0}
+$Queues = $MBXServers| Get-Queue -Filter {MessageCount -gt 99}
 ForEach( $Queue in $Queues)
 {
 	$QueueObject = New-Object Object
@@ -307,7 +314,7 @@ ForEach( $Queue in $Queues)
 	Add-Member -InputObject $QueueObject NoteProperty "Next Retry Time" $Queue.NextRetryTime 
 	$QueueCheckResult = $QueueCheckResult += $QueueObject
 	
-	if( $Queue.MessageCount -gt 50) # -or $Queue.LastError -ne $Null)
+	if( $Queue.MessageCount -gt 1) # -or $Queue.LastError -ne $Null)
 	{
 		$QueueCheckError = $QueueCheckError += $QueueObject
 	}
@@ -316,7 +323,6 @@ ForEach( $Queue in $Queues)
 
 ## Check Virtual Directory Service
 write-host checking Virtual Directory Service status...
-#$CASServers = Get-ClientAccessServer |where-object {$_.name -like "apmail*"}
 ForEach( $CASServer in $CASServers)
 {
 	$isSuccess = $NULL
@@ -426,34 +432,6 @@ ForEach( $CASServer in $CASServers)
 
 
 
-## Check checking MAPI Connectivity status...
-write-host checking MAPI Connectivity status...
-ForEach( $MBXServer in $MBXServers)
-{
-	$MAPITest = Test-MAPIConnectivity -Server $MBXServer
-	ForEach( $t in $MAPITest)
-	{
-		if( -not $t.Database.Contains("Mailbox Database"))
-		{
-			$Latency = ($t.Latency).TotalSeconds * 1000
-			$Latency = "{0:N0}"  -f $Latency
-			$MAPIObject = New-Object PSObject
-			Add-Member -InputObject $MAPIObject NoteProperty "Service" "MAPI"
-			Add-Member -InputObject $MAPIObject NoteProperty "Server" $t.Server
-			Add-Member -InputObject $MAPIObject NoteProperty "Database" $t.Database
-			Add-Member -InputObject $MAPIObject NoteProperty "Result" $t.Result
-			Add-Member -InputObject $MAPIObject NoteProperty "Latency (ms)" $Latency
-			Add-Member -InputObject $MAPIObject NoteProperty "Error" $t.Error
-		
-			$MAPITestResult = $MAPITestResult += $MAPIObject
-			if( $t.Result.Value -ne "Success")
-			{
-				$MAPITestError = $MAPITestError += $MAPIObject
-			}
-		}
-	}
-}
-## End of checking MAPI Connectivity status...
 
 
 ## Check ReplicationHealth
@@ -461,7 +439,7 @@ write-host checking ReplicationHealth....
 $REPLTest = $MBXServers | Test-ReplicationHealth 
 ForEach( $t in $REPLTest)
 {
-	if($t.Server.Contains("CNREC")){continue}
+	if($t.Server.Contains("ex-cas1")){continue}
 	$REPLObject = New-Object PSObject
 	Add-Member -InputObject $REPLObject NoteProperty "Service" "REPLHealth"
 	Add-Member -InputObject $REPLObject NoteProperty "Server" $t.Server
@@ -484,15 +462,24 @@ Write-Host -ForegroundColor Gray "Checking DB user count..."
 
 foreach ($mdb in $MBXDBs)
 {
-	$DBpeocountObject = New-Object Object
-        $Edbsize=Get-Mailboxdatabase -Status  $mdb|select databasesize
+     $DBpeocountObject = New-Object Object
+     $Edbsize=Get-Mailboxdatabase -Status  $mdb|%{$_.databasesize}
 	Add-Member -InputObject $DBpeocountObject NoteProperty "Database Name"	$mdb.Name
-	Add-Member -InputObject $DBpeocountObject NoteProperty "Database Count" (Get-Mailbox -Database $mdb).count
-	Add-Member -InputObject $DBpeocountObject NoteProperty "Database Size"   $Edbsize.databasesize.togb() 
+	Add-Member -InputObject $DBpeocountObject NoteProperty "Database Count" (Get-Mailbox -Database $mdb -ResultSize unlimited).count
+        Add-Member -InputObject $DBpeocountObject NoteProperty "Database Size Substring"   $Edbsize.Substring(0,$edbsize.Indexof("(")-1)
+	Add-Member -InputObject $DBpeocountObject NoteProperty "Database Size"   $Edbsize.togb()
 	$DBPeocountCheckResult = $DBPeocountCheckResult += $DBpeocountObject
 }
-#End of Counting DB users & Database size
 
+## End of Counting DB users  Database size
+
+##Start Server ComponentState
+Write-Host -ForegroundColor Gray "Checking ServerComponentState..."
+
+$ServerComponentStateResult = get-exchangeserver |get-ServerComponentState |select ServerFqdn, Component, State
+
+
+## End of Counting ServerComponentState
 
 #HTML styles for nice formatting
 $style = "<style>BODY{font-family: Arial; font-size: 10pt;}"
@@ -502,21 +489,20 @@ $style = $style + "TD{border: 1px solid black; padding: 5px; }"
 $style = $style + "</style>"
 	
 #SMTP options for sending the report email
-$smtpServer = "mail.xiaomi.com"
-$smtpFrom = "wujq@xiaomi.com"
+$smtpServer = "10.237.8.100"
+$smtpFrom = "systemadmin@xiaomi.com"
 $smtpTo = @()
 #Get-Content $WorkFolder\$ReportToList
-$smtpto +="wujq@xiaomi.com"
-$smtpto +="wangshuyuan@xiaomi.com"
-$smtpto +="wujiaqing@xiaomi.com" 
+$smtpto +="it-monitor@xiaomi.com"
+#$smtpto +="systema@xiaomi.com" 
 $messageSubject = "RAW Data of XiaoMi Daily Check OPs - "
 $messageSubject = $messageSubject += $CheckTime1
 $DiskIntro = "<BR><BR>The Disk Free Space Checking Results. <BR><BR>"
-$DiskReport = $DiskCheckResult | ConvertTo-Html -Fragment
+$DiskReport = $DiskCheckResult |Sort-Object -Property 'Percent Available' | ConvertTo-Html -Fragment 
 $ServiceIntro = "<BR><BR>The Services Checking Results as Below<BR><BR>"
 $ServiceReport = $ServiceCheckResult | ConvertTo-Html -Fragment
 $DBCopyIntro = "<BR><BR>The DBCopy Status Checking Results as Below<BR><BR>"
-$DBCopyReport = $DBCopyCheckResult | ConvertTo-Html -Fragment
+$DBCopyReport = $DBCopyCheckResult|Sort-Object -Property 'Status' | ConvertTo-Html -Fragment |foreach {if($_ -like "*<td>Failed</td>*"){$_ -replace "<td>Failed</td>", "<td bgcolor= 'red'>Failed</td>"} else {$_}}
 $DBBackupIntro = "<BR><BR>The DB Backup Status is shown below<BR><BR>"
 $DBBackupReport = $DBBackupCheckResult | ConvertTo-Html -Fragment
 $QueueIntro = "<BR><BR><H1>The Queues Status are listed below<BR><BR>"
@@ -531,12 +517,16 @@ $ECPTestIntro = "<BR><BR><H2>ECP Service Test Result<BR><BR>"
 $ECPTestReport = $ECPTestResult | ConvertTo-Html -Fragment
 $ASTestIntro = "<BR><BR><H2>Active Sync Service Test Result<BR><BR>"
 $ASTestReport = $ASTestResult | ConvertTo-Html -Fragment
-$MAPITestIntro = "<BR><BR><H2>MAPI Service Test Result<BR><BR>"
-$MAPITestReport = $MAPITestResult | ConvertTo-Html -Fragment
+#$MAPITestIntro = "<BR><BR><H2>MAPI Service Test Result<BR><BR>"
+#$MAPITestReport = $MAPITestResult | ConvertTo-Html -Fragment
 $REPLTestIntro = "<BR><BR><H2>DB Copies Replication Health Test Result<BR><BR>"
-$REPLTestReport = $REPLTestResult | ConvertTo-Html -Fragment
+$REPLTestReport = $REPLTestResult|Sort-Object -Property "Check Result" | ConvertTo-Html -Fragment |foreach {if($_ -like "*<td>未通过</td>*"){$_ -replace "<td>未通过</td>", "<td bgcolor= 'red'>未通过</td>"} else {$_}}
 $DBPeocountIntro = "<BR><BR>The DB People counts is shown below<BR><BR>"
-$DBPeocountReport = $DBPeocountCheckResult | ConvertTo-Html -Fragment
+$DBPeocountReport = $DBPeocountCheckResult| Sort-Object -Property "Database Count" -Descending  | ConvertTo-Html -Fragment
+$ServerComponentStateIntro = "<BR><BR>The Server ComponState is shown below<BR><BR>"
+$ServerComponentStateReport = $ServerComponentStateResult|Sort-Object -Property 'state' -Descending | ConvertTo-Html -Fragment |foreach {if($_ -like "*<td>Inactive</td>*"){$_ -replace "<td>Inactive</td>", "<td bgcolor = 'red'>Inactive</td>"} else {$_}}
+
+
 
 #Get ready to send email message
 $message = New-Object System.Net.Mail.MailMessage
@@ -549,7 +539,7 @@ if ($smtpTo)
 }
 $message.Subject = $messageSubject
 $message.IsBodyHTML = $true
-$message.Body = ConvertTo-Html -Body "$DBBackupIntro $DBBackupReport $DBCopyIntro $DBCopyReport $DiskIntro $DiskReport $Serviceintro $ServiceReport $QueueIntro $QueueReport $TimeDiffIntro $TimeDiffReport $EWSTestIntro $EWSTestReport $OWATestIntro $OWATestReport $ECPTestIntro $ECPTestReport $ASTestIntro $ASTestReport $MAPITestIntro $MAPITestReport $REPLTestIntro $REPLTestReport $DBPeocountIntro $DBPeocountReport" -Head $style
+$message.Body = ConvertTo-Html -Body "$DBBackupIntro $DBBackupReport $DBCopyIntro $DBCopyReport $DiskIntro $DiskReport $Serviceintro $ServiceReport $QueueIntro $QueueReport $TimeDiffIntro $TimeDiffReport $REPLTestIntro $REPLTestReport $DBPeocountIntro $DBPeocountReport $ServerComponentStateIntro $ServerComponentStateReport" -Head $style
 $message.body
 #Send email message
 $smtp = New-Object Net.Mail.SmtpClient -argumentList $smtpServer ;
